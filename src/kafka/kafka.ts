@@ -27,7 +27,23 @@ const MyLogCreator =
     }
   };
 
-export const buildKafkaClient = (az: string) =>
+export const buildKafkaClient = (az: string, inkless: boolean) =>
+  inkless ? buildInklessKafkaClient(az): buildTraditionalKafkaClient(az);
+
+export const buildTraditionalKafkaClient = (az: string) =>
+  new Kafka({
+    clientId: `loadtest;inkless_az=${az}`,
+    brokers: [brokers],
+    ssl: {
+      rejectUnauthorized: false,
+      key: config.KAFKA_ACCESS_KEY,
+      cert: config.KAFKA_ACCESS_CERT,
+      ca: config.KAFKA_CA_CERT,
+    },
+    logCreator: MyLogCreator,
+  });
+
+export const buildInklessKafkaClient = (az: string) =>
   new Kafka({
     clientId: `loadtest;inkless_az=${az}`,
     brokers: [brokers],

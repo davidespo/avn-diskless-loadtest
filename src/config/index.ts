@@ -10,5 +10,10 @@ export const config = z
     KAFKA_ACCESS_KEY: z.string(),
     KAFKA_ACCESS_CERT: z.string(),
     KAFKA_CA_CERT: z.string(),
+    INKLESS_BROKER_HOST: z.string(),
+    INKLESS_BROKER_PORT: z.coerce.number(),
+    INKLESS_ACCESS_KEY: z.string(),
+    INKLESS_ACCESS_CERT: z.string(),
+    INKLESS_CA_CERT: z.string(),
   })
   .parse(process.env);

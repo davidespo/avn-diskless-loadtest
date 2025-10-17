@@ -6,6 +6,7 @@ import { z } from "zod";
 export type LatencyObservation = BaseObservation;
 
 export const LatencyTestConfig = z.object({
+  inkless: z.boolean().default(false),
   az: z.string(),
   session: z.string(),
   duration: z.string(),
@@ -18,9 +19,10 @@ export class LatencyService extends StatStorageService<LatencyObservation> {
     super();
   }
 
-  startTest = async (config: LatencyTestConfig, sink: Sink<LatencyObservation>) => {
-    const { az, session, duration, topic } = config;
-    const producerProcess = new KProducer({
+  startTest = (config: LatencyTestConfig, sink: Sink<LatencyObservation>) => {
+    const { az, session, duration, topic, inkless } = config;
+    const producer = new KProducer({
+      inkless,
       az,
       session,
       topic,
@@ -31,8 +33,9 @@ export class LatencyService extends StatStorageService<LatencyObservation> {
         duration,
       },
       configuration: {},
-    }).start(sink, getNoopSink());
-    const consumerProcess = new KConsumer({
+    });
+    const consumer = new KConsumer({
+      inkless,
       az,
       session,
       topic,
@@ -40,9 +43,30 @@ export class LatencyService extends StatStorageService<LatencyObservation> {
       consumerGroup: `latency-test-${session}`,
       duration,
       configuration: {},
-    }).start(sink, getNoopSink());
-    const [producerCount, consumerCount] = await Promise.all([producerProcess, consumerProcess]);
-    return { producerCount, consumerCount };
+    });
+    const promise = new Promise<void>(async (resolve, reject) => {
+      try {
+        console.trace('[LATENCY_TEST] Starting Latency Test');
+        const noopSink = getNoopSink();
+        await consumer.subscribe(sink, noopSink);
+        console.trace('[LATENCY_TEST] Consumer Subscribed... starting both producer and consumer');
+        await Promise.all([
+          producer.start(sink, noopSink), 
+          consumer.start(sink, noopSink)
+        ]);
+        console.trace('[LATENCY_TEST] Latency Test Completed');
+        resolve();
+      } catch (error) {
+        reject(error);
+      }
+    });
+    const stop = async () => {
+      console.trace('[LATENCY_TEST] Stopping Latency Test');
+      await producer.stop();
+      await consumer.stop();
+      console.trace('[LATENCY_TEST] Latency Test Stopped');
+    }
+    return { promise, stop };
   };
 
   getTimer(observation: Omit<LatencyObservation, "value">) {

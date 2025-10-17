@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "start": "ts-node src/main.ts",
-    "start:dev": "ts-node-dev src/main.ts",
+    "dev": "ts-node-dev src/main.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -20,12 +20,14 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
+    "@de44/console-flow": "^1.3.2",
     "@types/ms": "^2.1.0",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "kafkajs": "^2.2.4",
     "ms": "^2.1.3",
+    "pretty-bytes": "^7.1.0",
     "zod": "^4.1.12",
     "zustand": "^5.0.8"
   }

@@ -61,7 +61,7 @@ export class StatObserver {
       p90,
       p99,
       std,
-      latestValues: this.recentValues.slice(-10),
+      latestValues: this.recentValues //.slice(-10),
     };
   }
 }
