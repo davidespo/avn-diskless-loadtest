@@ -1,4 +1,5 @@
 import { Response, Request } from "express";
+import { ThroughputObservation } from "./types";
 
 export type Sink<T> = (value: T) => void;
 
@@ -61,3 +62,45 @@ export const getCompositeSink = <T>(sinks: Sink<T>[]): Sink<T> => {
 export const getNoopSink = <T>(): Sink<T> => {
   return () => {};
 };
+
+// export const aggregateThroughputSink = (
+//   minDelayMs: number = 500,
+//   emit: Sink<ThroughputObservation>
+// ): Sink<ThroughputObservation> => {
+//   const aggMap: Record<
+//     string,
+//     { firstTs: number; accumulatedValueBytes: number; lastEmit: number }
+//   > = {};
+//   const getKey = (value: ThroughputObservation) => {
+//     return `${value.client}::${value.scope}::${value.topic}::${
+//       value.partition ?? "nopartition"
+//     }`;
+//   };
+//   return (value: ThroughputObservation) => {
+//     const now = Date.now();
+//     const key = getKey(value);
+//     let entry = aggMap[key];
+//     if (!entry) {
+//       entry = {
+//         firstTs: value.ts,
+//         accumulatedValueBytes: 0,
+//         lastEmit: now,
+//       };
+//       aggMap[key] = entry;
+//     }
+//     entry.accumulatedValueBytes += value.valueBytes;
+//     if (now - entry.lastEmit >= minDelayMs) {
+//       const aggregatedObservation: ThroughputObservation = {
+//         ts: now,
+//         client: value.client,
+//         scope: value.scope,
+//         topic: value.topic,
+//         partition: value.partition,
+//         valueBytes: entry.accumulatedValueBytes,
+//         duration: now - entry.firstTs,
+//       };
+//       emit(aggregatedObservation);
+//       delete aggMap[key];
+//     }
+//   };
+// };

@@ -1,13 +1,13 @@
 import { z } from "zod";
 import { Producer } from "kafkajs";
-import { buildKafkaClient, buildTraditionalKafkaClient } from "./kafka";
+import { buildKafkaClient, KafkaConnectionConfig } from "./kafka";
 import ms, { StringValue } from "ms";
 import { Sink } from "../observability/Sink";
 import { LatencyObservation, ThroughputObservation } from "../observability";
 import prettyBytes from "pretty-bytes";
 
 export const KProducerConfig = z.object({
-  inkless: z.boolean().default(false),
+  connectionConfig: KafkaConnectionConfig,
   session: z.string(),
   az: z.string(),
   topic: z.string(),
@@ -27,15 +27,10 @@ export class KProducer {
   private isRunning: boolean = false;
   private isConnected: boolean = false;
   constructor(readonly config: KProducerConfig) {
-    this.producer = buildKafkaClient(config.az, config.inkless).producer({
+    this.producer = buildKafkaClient(config.connectionConfig).producer({
       ...config.configuration,
       allowAutoTopicCreation: false,
     });
-  }
-
-  private async sendBatch(throughputSink: Sink<ThroughputObservation>) {
-    const messages = this.buildBatch();
-    await this._sendBatch(messages, throughputSink);
   }
 
   private buildBatch() {
@@ -52,6 +47,7 @@ export class KProducer {
     messages: { key: Buffer; value: Buffer }[],
     throughputSink: Sink<ThroughputObservation>
   ) {
+    const startTime = Date.now();
     const {
       rate: { count, size },
       topic,
@@ -62,10 +58,13 @@ export class KProducer {
       messages,
     });
     throughputSink({
+      kind: "throughput",
+      ts: Date.now(),
       client: "producer",
       scope: "throughput",
       topic,
-      value: size * count,
+      valueBytes: size * count,
+      duration: Date.now() - startTime,
     });
   }
 
@@ -78,6 +77,7 @@ export class KProducer {
     const {
       rate: { delay, duration },
     } = this.config;
+    const startTime = Date.now();
     const durationMs = ms(duration as StringValue);
     const delayMs = delay ? ms(delay as StringValue) : -1;
     const endTime = Date.now() + durationMs;
@@ -93,19 +93,22 @@ export class KProducer {
         count++;
         if (!this.isRunning) break;
         latencySink({
+          kind: "latency",
+          ts: Date.now(),
           topic: this.config.topic,
           client: "producer",
-          scope: "clientLatency",
-          value: Date.now() - startTime,
+          scope: "latency",
+          valueMs: Date.now() - startTime,
         });
         if (delayMs > 0) {
           await new Promise((resolve) => setTimeout(resolve, delayMs));
         }
       }
+      const durationMsActual = Date.now() - startTime;
       const totalMessages = count * this.config.rate.count;
       const totalBytes = totalMessages * this.config.rate.size;
       const prettyTotalBytes = prettyBytes(totalBytes);
-      const bytesPerSec = totalBytes / (durationMs / 1000);
+      const bytesPerSec = totalBytes / (durationMsActual / 1000);
       const prettyRate = prettyBytes(bytesPerSec) + "/s";
       console.trace("[PRODUCER.start] Producer finished sending messages.", {
         totalBatches: count,

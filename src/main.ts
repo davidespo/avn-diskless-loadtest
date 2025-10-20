@@ -1,12 +1,22 @@
-import {FlowLogger} from "@de44/console-flow"
+import { FlowLogger } from "@de44/console-flow";
 import express from "express";
 import cors from "cors";
-import { KConsumer, KConsumerConfig, KProducer, KProducerConfig } from "./kafka";
-import { latencyService, LatencyTestConfig, StatStorageServiceListOptions, throughputService } from "./observability";
+import {
+  KConsumer,
+  KConsumerConfig,
+  KProducer,
+  KProducerConfig,
+} from "./kafka";
+import {
+  latencyService,
+  LatencyTestConfig,
+} from "./observability";
 import { getSSESink, SSESinkOptions } from "./observability/Sink";
+import { kafkaService } from "./kafka/KafkaService";
+import { KafkaConnectionConfig } from "./kafka/kafka";
 
 FlowLogger.configureConsole({
-  format: "cli"
+  format: "cli",
 });
 
 const app = express();
@@ -34,6 +44,27 @@ app.get("/sse-test", async (req, res) => {
   console.debug("Ending SSE Test");
   res.end();
   console.debug("SSE Test Ended");
+});
+
+app.post("/kafka/connection/test", async (req, res) => {
+  try {
+    const connectionConfig = KafkaConnectionConfig.parse(req.body);
+    const isValid = await kafkaService.testConnectionConfig(connectionConfig);
+    res.json({ success: true, message: "Connection successful" });
+  } catch (error) {
+    const errorMessage =
+      error instanceof Error
+        ? `${error.message}\n${error.stack ?? ""}`
+        : "Unknown error";
+    console.error("Error testing Kafka connection:", error);
+    res
+      .status(500)
+      .json({
+        success: false,
+        message: "Connection test failed",
+        error: errorMessage,
+      });
+  }
 });
 
 app.post("/produce", async (req, res) => {
@@ -80,7 +111,7 @@ app.post("/latency", async (req, res) => {
     const sink = getSSESink(res, req, sinkOptions);
 
     console.trace("[/latency] Starting Latency Test with config:", config);
-    const {promise, stop} = latencyService.startTest(config, sink);
+    const { promise, stop } = latencyService.startTest(config, sink);
     sinkOptions.stop = stop;
     console.trace("[/latency] Latency Test started");
 
@@ -101,56 +132,6 @@ const safeJsonQueryParse = (query: any, key: string): any => {
   }
   return undefined;
 };
-
-app.get("/latency", async (req, res) => {
-  try {
-    const filter = safeJsonQueryParse(req.query, "filter");
-    let options: StatStorageServiceListOptions;
-    try {
-      options = StatStorageServiceListOptions.parse({
-        ...req.query,
-        filter: {
-          ...filter,
-          scope: "latency",
-        },
-      });
-    } catch (parseError) {
-      console.error(parseError);
-      res.status(400).json({ error: "Invalid filter", parseError });
-      return;
-    }
-    const data = await latencyService.list(options);
-    res.json({ data, options });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Invalid query parameters" });
-  }
-});
-
-app.get("/throughput", async (req, res) => {
-  try {
-    const filter = safeJsonQueryParse(req.query, "filter");
-    let options: StatStorageServiceListOptions;
-    try {
-      options = StatStorageServiceListOptions.parse({
-        ...req.query,
-        filter: {
-          ...filter,
-          scope: "throughput",
-        },
-      });
-    } catch (parseError) {
-      console.error(parseError);
-      res.status(400).json({ error: "Invalid filter", parseError });
-      return;
-    }
-    const data = await throughputService.list(options);
-    res.json({ data, options });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Invalid query parameters" });
-  }
-});
 
 // Start server
 app.listen(port, () => {

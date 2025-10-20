@@ -1,0 +1,9 @@
+.header a {
+    color: white;
+    text-decoration: none;
+}
+
+.header a.active {
+    font-weight: bolder;
+    text-decoration: underline;
+}

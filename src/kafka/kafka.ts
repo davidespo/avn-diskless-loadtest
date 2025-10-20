@@ -1,5 +1,6 @@
 import { Kafka, logLevel } from "kafkajs";
 import { config } from "../config";
+import z from "zod";
 
 const brokers = `${config.KAFKA_BROKER_HOST}:${config.KAFKA_BROKER_PORT}`;
 
@@ -27,31 +28,26 @@ const MyLogCreator =
     }
   };
 
-export const buildKafkaClient = (az: string, inkless: boolean) =>
-  inkless ? buildInklessKafkaClient(az): buildTraditionalKafkaClient(az);
+export const KafkaConnectionConfig = z.object({
+  az: z.string().default("random-az-assignment"),
+  clientId: z.string().default("loadtest-client"),
+  host: z.string(),
+  port: z.coerce.number(),
+  accessKey: z.string(),
+  accessCert: z.string(),
+  caCert: z.string(),
+});
+export type KafkaConnectionConfig = z.infer<typeof KafkaConnectionConfig>;
 
-export const buildTraditionalKafkaClient = (az: string) =>
+export const buildKafkaClient = (config: KafkaConnectionConfig) =>
   new Kafka({
-    clientId: `loadtest;inkless_az=${az}`,
-    brokers: [brokers],
+    clientId: `${config.clientId};inkless_az=${config.az}`,
+    brokers: [`${config.host}:${config.port}`],
     ssl: {
       rejectUnauthorized: false,
-      key: config.KAFKA_ACCESS_KEY,
-      cert: config.KAFKA_ACCESS_CERT,
-      ca: config.KAFKA_CA_CERT,
-    },
-    logCreator: MyLogCreator,
-  });
-
-export const buildInklessKafkaClient = (az: string) =>
-  new Kafka({
-    clientId: `loadtest;inkless_az=${az}`,
-    brokers: [brokers],
-    ssl: {
-      rejectUnauthorized: false,
-      key: config.KAFKA_ACCESS_KEY,
-      cert: config.KAFKA_ACCESS_CERT,
-      ca: config.KAFKA_CA_CERT,
+      key: config.accessKey,
+      cert: config.accessCert,
+      ca: config.caCert,
     },
     logCreator: MyLogCreator,
   });

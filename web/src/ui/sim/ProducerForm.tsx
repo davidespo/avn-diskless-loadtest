@@ -1,12 +1,27 @@
 import { Button } from "primereact/button";
+import type { KCluster } from "../../types";
 import { useClientConnections } from "../../hooks";
 
-export const ProducerForm = () => {
-  const { createProducerLatencyConnection } = useClientConnections();
+export type ProducerClient = {
+  id: string;
+  clusterId: string;
+};
+
+type ProducerFormProps = {
+  cluster: KCluster;
+};
+export const ProducerForm = ({ cluster }: ProducerFormProps) => {
+  const { startProducerLoadConnection } = useClientConnections();
   return (
     <div className="flex flex-wrap justify-content-around">
-      <Button label="Add Latency Producer" icon="pi pi-stopwatch" onClick={createProducerLatencyConnection} />
-      <Button label="Add Throughput Producer" icon="pi pi-truck" severity="success" />
+      <Button
+        label="Add Throughput Producer"
+        icon="pi pi-truck"
+        severity="success"
+        onClick={() => {
+          startProducerLoadConnection(cluster);
+        }}
+      />
     </div>
   );
 };

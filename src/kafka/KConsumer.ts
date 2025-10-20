@@ -1,12 +1,12 @@
 import { z } from "zod";
-import { buildKafkaClient, buildTraditionalKafkaClient } from "./kafka";
+import { buildKafkaClient, KafkaConnectionConfig } from "./kafka";
 import { Consumer, EachBatchPayload, Message } from "kafkajs";
 import ms, { StringValue } from "ms";
 import { LatencyObservation, ThroughputObservation } from "../observability";
 import { Sink } from "../observability/Sink";
 
 export const KConsumerConfig = z.object({
-  inkless: z.boolean().default(false),
+  connectionConfig: KafkaConnectionConfig,
   session: z.string(),
   mode: z.enum(["latency", "throughput"]),
   az: z.string(),
@@ -23,7 +23,7 @@ export class KConsumer {
   private count = 0;
   private isListening = false;
   constructor(readonly config: KConsumerConfig) {
-    this.consumer = buildKafkaClient(config.az, config.inkless).consumer({
+    this.consumer = buildKafkaClient(config.connectionConfig).consumer({
       ...config.configuration,
       groupId: config.consumerGroup,
     });
@@ -36,8 +36,13 @@ export class KConsumer {
     console.trace('[CONSUMER.subscribe] Connected');
     await this.consumer.subscribe({ topic: this.config.topic, fromBeginning: false });
     console.trace('[CONSUMER.subscribe] Subscribed to topic:', this.config.topic);
+    const lastDataTimeHolder = { lastDataTime: Date.now() };
+    const batchHandler = this.buildMessageHandler(latencySink, throughputSink);
     await this.consumer.run({
-      eachBatch: this.buildMessageHandler(latencySink, throughputSink),
+      eachBatch: async (batchPayload) => {
+        batchHandler(batchPayload, lastDataTimeHolder.lastDataTime);
+        lastDataTimeHolder.lastDataTime = Date.now();
+      },
     });
     console.trace('[CONSUMER.subscribe] Consumer is listening for messages...');
     this.isListening = true;
@@ -48,17 +53,19 @@ export class KConsumer {
     const now = Date.now();
     const latency = now - ts;
     sink({
+      kind: "latency",
+      ts: Date.now(),
       client: "consumer",
-      scope: "e2eLatency",
+      scope: "latency",
       topic,
       partition,
-      value: latency,
+      valueMs: latency,
     });
   };
 
   private buildMessageHandler =
     (latencySink: Sink<LatencyObservation>, throughputSink: Sink<ThroughputObservation>) =>
-    async (payload: EachBatchPayload) => {
+    async (payload: EachBatchPayload, lastFetchTime: number) => {
       const { topic, partition, messages } = payload.batch;
       this.count += messages.length;
       switch (this.config.mode) {
@@ -75,11 +82,14 @@ export class KConsumer {
             0
           );
           throughputSink({
+            kind: "throughput",
+            ts: Date.now(),
             client: "consumer",
             scope: "throughput",
             topic,
             partition,
-            value: batchSize,
+            valueBytes: batchSize,
+            duration: 0, // Duration is not calculated here
           });
           break;
       }

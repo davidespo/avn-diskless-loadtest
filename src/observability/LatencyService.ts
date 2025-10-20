@@ -1,12 +1,11 @@
 import { KConsumer, KProducer } from "../kafka";
+import { KafkaConnectionConfig } from "../kafka/kafka";
 import { getNoopSink, Sink } from "./Sink";
-import { BaseObservation, StatStorageService } from "./StatStorageService";
+import { LatencyObservation } from "./types";
 import { z } from "zod";
 
-export type LatencyObservation = BaseObservation;
-
 export const LatencyTestConfig = z.object({
-  inkless: z.boolean().default(false),
+  connectionConfig: KafkaConnectionConfig,
   az: z.string(),
   session: z.string(),
   duration: z.string(),
@@ -14,15 +13,14 @@ export const LatencyTestConfig = z.object({
 });
 export type LatencyTestConfig = z.infer<typeof LatencyTestConfig>;
 
-export class LatencyService extends StatStorageService<LatencyObservation> {
+export class LatencyService {
   constructor() {
-    super();
   }
 
   startTest = (config: LatencyTestConfig, sink: Sink<LatencyObservation>) => {
-    const { az, session, duration, topic, inkless } = config;
+    const { az, session, duration, topic, connectionConfig } = config;
     const producer = new KProducer({
-      inkless,
+      connectionConfig,
       az,
       session,
       topic,
@@ -35,7 +33,7 @@ export class LatencyService extends StatStorageService<LatencyObservation> {
       configuration: {},
     });
     const consumer = new KConsumer({
-      inkless,
+      connectionConfig,
       az,
       session,
       topic,
@@ -70,10 +68,9 @@ export class LatencyService extends StatStorageService<LatencyObservation> {
   };
 
   getTimer(observation: Omit<LatencyObservation, "value">) {
-    const obs = this.save;
     const startTime = Date.now();
     return {
-      stop: () => obs({ ...observation, value: Date.now() - startTime }),
+      stop: (): LatencyObservation => ({ ...observation, valueMs: Date.now() - startTime }),
     };
   }
 }

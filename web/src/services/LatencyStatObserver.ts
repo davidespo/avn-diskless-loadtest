@@ -1,17 +1,6 @@
-export type Stat = {
-  key: string;
-  lastUpdated: number;
-  sum: number;
-  count: number;
-  avg: number;
-  median: number;
-  p90: number;
-  p99: number;
-  std: number;
-  latestValues: number[];
-};
+import { type LatencyStat } from '../types/index.js';
 
-export class StatObserver {
+export class LatencyStatObserver {
   private recentValues: number[] = [];
   private lastUpdated: number = Date.now();
   private key: string;
@@ -28,7 +17,7 @@ export class StatObserver {
     this.lastUpdated = Date.now();
   }
 
-  get(): Stat {
+  get(): LatencyStat {
     if (this.recentValues.length === 0) {
       return {
         key: this.key,
