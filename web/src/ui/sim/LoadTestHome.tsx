@@ -1,12 +1,11 @@
 import { Fieldset } from "primereact/fieldset";
-import { ConsumerList } from "./ConsumerList";
-import { LatencyDisplay } from "./LatencyDisplay";
-import { ProducerForm } from "./ProducerForm";
-import { ProducerList } from "./ProducerList";
 import { useState } from "react";
 import { useClusters } from "../../hooks/useClusters";
 import { Dropdown } from "primereact/dropdown";
 import type { KCluster } from "../../types";
+import { ClientConnectionList } from "./ClientConnectionList";
+import { GlobalMetricsDisplay } from "./GlobalMetricsDisplay";
+import { ClientConnectionForm } from "./ClientConnectionForm";
 
 export const LoadTestHome = () => {
   const [activeCluster, setActiveCluster] = useState<KCluster | null>(null);
@@ -33,16 +32,17 @@ export const LoadTestHome = () => {
       </Fieldset>
       {activeCluster && (
         <>
-          <Fieldset legend="Latency" className="mb-5" toggleable>
-            <LatencyDisplay cluster={activeCluster} />
+          <Fieldset legend="Load Test Controller + Metrics" className="mb-5" toggleable>
+            <div className="flex flex-column gap-2">
+                <ClientConnectionForm cluster={activeCluster} />
+                <div className="pb-3 px-3 mx-4">
+                    <hr />
+                </div>
+                <GlobalMetricsDisplay />
+            </div>
           </Fieldset>
-          <Fieldset legend="Load Test" className="mb-5" toggleable>
-            
-          <h2>Producers</h2>
-          <ProducerForm cluster={activeCluster} />
-          <ProducerList />
-          <h2>Consumers</h2>
-          <ConsumerList />
+          <Fieldset legend="Load Test Clients" className="mb-5" toggleable>
+            <ClientConnectionList />
           </Fieldset>
         </>
       )}

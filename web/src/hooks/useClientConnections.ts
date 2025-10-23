@@ -1,15 +1,17 @@
 import _ from "lodash";
-import { LatencyStatObserver } from "../services";
 import {
   SseObservation,
   type ClientConnectionState,
   type KCluster,
-  type LatencyStat,
+  type LatencyObserverResult,
+  type ThroughputObserverResult,
 } from "../types";
 import { nanoid } from "nanoid";
 import { create } from "zustand";
-import { ThroughputStatObserver } from "../services/ThroughputStatObserver";
-import type { ThroughputStat } from "../types/ThroughputStat";
+import { LatencyObserver, ThroughputObserver } from "../services";
+import { useLoadtestApi } from "./useLoadtestApi";
+
+// https://avn-kafka-loadtest-api-751701266973.us-central1.run.app
 
 const safeExec = async (fn: () => Promise<void>) => {
   try {
@@ -130,18 +132,20 @@ class ClientConnectionController {
 
 type ClientConnectionStarter = (
   cluster: KCluster,
+  apiEndpoint: string,
   onUpdate: ClientConnectionUpdater,
   statObserver: OnSseStatObserver,
   az?: string
 ) => Promise<ClientConnectionController>;
 const startLatencyClientConnection: ClientConnectionStarter = async (
   cluster: KCluster,
+  apiEndpoint: string,
   onUpdate: ClientConnectionUpdater,
   statObserver: OnSseStatObserver,
   az = "random_az_assignment"
 ): Promise<ClientConnectionController> => {
   return new ClientConnectionController({
-    uri: `http://localhost:3000/latency`,
+    uri: `${apiEndpoint}/latency`,
     init: {
       method: "POST",
       headers: {
@@ -163,12 +167,13 @@ const startLatencyClientConnection: ClientConnectionStarter = async (
 
 const startProducerLoadClientConnection: ClientConnectionStarter = async (
   cluster: KCluster,
+  apiEndpoint: string,
   onUpdate: ClientConnectionUpdater,
   statObserver: OnSseStatObserver,
   az = "random_az_assignment"
 ): Promise<ClientConnectionController> => {
   return new ClientConnectionController({
-    uri: `http://localhost:3000/produce`,
+    uri: `${apiEndpoint}/produce`,
     init: {
       method: "POST",
       headers: {
@@ -183,7 +188,7 @@ const startProducerLoadClientConnection: ClientConnectionStarter = async (
         rate: {
           // TODO: make configurable
           count: 100,
-          delay: "1s",
+          delay: null,
           size: 1024,
           duration: "10m",
         },
@@ -199,12 +204,13 @@ const startProducerLoadClientConnection: ClientConnectionStarter = async (
 
 const startConsumerLoadClientConnection: ClientConnectionStarter = async (
   cluster: KCluster,
+  apiEndpoint: string,
   onUpdate: ClientConnectionUpdater,
   statObserver: OnSseStatObserver,
   az = "random_az_assignment"
 ): Promise<ClientConnectionController> => {
   return new ClientConnectionController({
-    uri: `http://localhost:3000/consume`,
+    uri: `${apiEndpoint}/consume`,
     init: {
       method: "POST",
       headers: {
@@ -219,6 +225,7 @@ const startConsumerLoadClientConnection: ClientConnectionStarter = async (
         topic: "loadtest",
         consumerGroup: "cg-loadtest-" + nanoid(12),
         duration: "10m",
+        startFromBeginning: false, // TODO: make configurable
         configuration: {},
       }),
     },
@@ -229,19 +236,21 @@ const startConsumerLoadClientConnection: ClientConnectionStarter = async (
 
 type UseClientConnectionsState = {
   connections: ClientConnectionState[];
-  clientLatencyStatObservers: Record<string, LatencyStatObserver>;
-  clientThroughputStatObservers: Record<string, ThroughputStatObserver>;
-  globalLatencyStatObservers: Record<string, LatencyStatObserver>;
-  globalThroughputStatObservers: Record<string, ThroughputStatObserver>;
+  clientLatencyObservers: Record<string, LatencyObserver>;
+  clientThroughputObservers: Record<string, ThroughputObserver>;
+  globalLatencyObservers: Record<string, LatencyObserver>;
+  globalThroughputObservers: Record<string, ThroughputObserver>;
   startConnection: (
     cluster: KCluster,
     starterFunc: ClientConnectionStarter,
     kind: ClientConnectionState["kind"]
-  ) => Promise<void>;
+  ) => Promise<string>;
   resetStatsObservers: () => Promise<void>;
   stopConnection: (id: string) => Promise<void>;
+  removeConnection: (id: string) => Promise<void>;
 };
 const useClientConnectionsState = create<UseClientConnectionsState>((set) => {
+  const { activeEndpoint } = useLoadtestApi.getState();
   const addConnection = async (state: ClientConnectionState) => {
     set(({ connections: prevConnections }) => {
       const nextConnections = [...prevConnections, state];
@@ -251,6 +260,20 @@ const useClientConnectionsState = create<UseClientConnectionsState>((set) => {
         nextConnections,
       });
       return { connections: nextConnections };
+    });
+  };
+  const stopConnection = async (id: string) => {
+    set(({ connections: prevConnections }) => {
+      const connection = prevConnections.find((conn) => conn.id === id);
+      if (connection) {
+        connection.stop(); // TODO: handle errors?
+      }
+      return { connections: prevConnections.map((conn) => {
+        if (conn.id === id) {
+          return { ...conn, isRunning: false, isConnected: false };
+        }
+        return conn;
+      }) };
     });
   };
   const removeConnection = async (id: string) => {
@@ -264,11 +287,22 @@ const useClientConnectionsState = create<UseClientConnectionsState>((set) => {
   };
   const updateConnection = async (
     id: string,
-    updates: Partial<ClientConnectionState>
+    {isConnected, isRunning}: Partial<ClientConnectionState>
   ) => {
     set(({ connections: prevConnections }) => ({
-      connections: prevConnections.map((conn) =>
-        conn.id === id ? _.merge({}, conn, { state: updates }) : conn
+      connections: prevConnections.map((conn) => {
+        if (conn.id === id) {
+          const updates = {};
+          if (typeof isConnected === "boolean") {
+            Object.assign(updates, { isConnected });
+          }
+          if (typeof isRunning === "boolean") {
+            Object.assign(updates, { isRunning });
+          }
+          return _.merge({}, conn, updates);
+        }
+        return conn
+      }
       ),
     }));
   };
@@ -281,10 +315,10 @@ const useClientConnectionsState = create<UseClientConnectionsState>((set) => {
     set((state) => {
       switch (observation.kind) {
         case "latency": {
-          let clientObservers = state.clientLatencyStatObservers;
+          let clientObservers = state.clientLatencyObservers;
           let clientObserver = clientObservers[clientKey];
           if (!clientObserver) {
-            clientObserver = new LatencyStatObserver(
+            clientObserver = new LatencyObserver(
               `${observation.client} ${observation.kind}`
             );
             clientObservers = {
@@ -292,12 +326,12 @@ const useClientConnectionsState = create<UseClientConnectionsState>((set) => {
               [clientKey]: clientObserver,
             };
           }
-          clientObserver.observe(observation.valueMs);
+          clientObserver.observe(observation.valueMs, observation.ts);
 
-          let globalObservers = state.globalLatencyStatObservers;
+          let globalObservers = state.globalLatencyObservers;
           let globalObserver = globalObservers[globalKey];
           if (!globalObserver) {
-            globalObserver = new LatencyStatObserver(
+            globalObserver = new LatencyObserver(
               `${observation.client} ${observation.kind}`
             );
             globalObservers = {
@@ -305,18 +339,18 @@ const useClientConnectionsState = create<UseClientConnectionsState>((set) => {
               [globalKey]: globalObserver,
             };
           }
-          globalObserver.observe(observation.valueMs);
+          globalObserver.observe(observation.valueMs, observation.ts);
 
           return {
-            clientLatencyStatObservers: clientObservers,
-            globalLatencyStatObservers: globalObservers,
+            clientLatencyObservers: clientObservers,
+            globalLatencyObservers: globalObservers,
           };
         }
         case "throughput": {
-          let clientObservers = state.clientThroughputStatObservers;
+          let clientObservers = state.clientThroughputObservers;
           let clientObserver = clientObservers[clientKey];
           if (!clientObserver) {
-            clientObserver = new ThroughputStatObserver(
+            clientObserver = new ThroughputObserver(
               `${observation.client} ${observation.kind}`
             );
             clientObservers = {
@@ -324,12 +358,12 @@ const useClientConnectionsState = create<UseClientConnectionsState>((set) => {
               [clientKey]: clientObserver,
             };
           }
-          clientObserver.observe(observation.valueBytes, observation.duration);
+          clientObserver.observe(observation.valueBytes, observation.ts);
 
-          let globalObservers = state.globalThroughputStatObservers;
+          let globalObservers = state.globalThroughputObservers;
           let globalObserver = globalObservers[globalKey];
           if (!globalObserver) {
-            globalObserver = new ThroughputStatObserver(
+            globalObserver = new ThroughputObserver(
               `${observation.client} ${observation.kind}`
             );
             globalObservers = {
@@ -337,11 +371,11 @@ const useClientConnectionsState = create<UseClientConnectionsState>((set) => {
               [globalKey]: globalObserver,
             };
           }
-          clientObserver.observe(observation.valueBytes, observation.duration);
+          globalObserver.observe(observation.valueBytes, observation.ts);
 
           return {
-            clientThroughputStatObservers: clientObservers,
-            globalThroughputStatObservers: globalObservers,
+            clientThroughputObservers: clientObservers,
+            globalThroughputObservers: globalObservers,
           };
           break;
         }
@@ -357,10 +391,10 @@ const useClientConnectionsState = create<UseClientConnectionsState>((set) => {
   };
   return {
     connections: [],
-    clientLatencyStatObservers: {},
-    clientThroughputStatObservers: {},
-    globalLatencyStatObservers: {},
-    globalThroughputStatObservers: {},
+    clientLatencyObservers: {},
+    clientThroughputObservers: {},
+    globalLatencyObservers: {},
+    globalThroughputObservers: {},
     startConnection: async (
       cluster: KCluster,
       starterFunc: ClientConnectionStarter,
@@ -368,6 +402,7 @@ const useClientConnectionsState = create<UseClientConnectionsState>((set) => {
     ) => {
       const connection = await starterFunc(
         cluster,
+        activeEndpoint,
         updateConnection,
         onBaseStatObserver
       );
@@ -387,20 +422,22 @@ const useClientConnectionsState = create<UseClientConnectionsState>((set) => {
         id: connection.id,
         cluster: { id: cluster.id, title: cluster.title },
         kind,
-        isRunning: false,
+        isRunning: true,
         isConnected: false,
         stop: () => connection.stop(),
         latencyStats: [],
         throughputStats: [],
       });
+      return connection.id;
     },
-    stopConnection: async (id: string) => await removeConnection(id),
+    stopConnection,
+    removeConnection,
     resetStatsObservers: async () =>
       set({
-        clientLatencyStatObservers: {},
-        clientThroughputStatObservers: {},
-        globalLatencyStatObservers: {},
-        globalThroughputStatObservers: {},
+        clientLatencyObservers: {},
+        clientThroughputObservers: {},
+        globalLatencyObservers: {},
+        globalThroughputObservers: {},
       }),
   };
 });
@@ -408,41 +445,42 @@ const useClientConnectionsState = create<UseClientConnectionsState>((set) => {
 export const useClientConnections = () => {
   const {
     connections,
-    clientLatencyStatObservers,
-    clientThroughputStatObservers,
-    globalLatencyStatObservers,
-    globalThroughputStatObservers,
+    clientLatencyObservers,
+    clientThroughputObservers,
+    globalLatencyObservers,
+    globalThroughputObservers,
     resetStatsObservers,
     startConnection,
     stopConnection,
+    removeConnection,
   } = useClientConnectionsState();
 
-  const clientLatencyStats: Record<string, LatencyStat> = {};
-  for (const key of Object.keys(clientLatencyStatObservers)) {
-    const observer = clientLatencyStatObservers[key];
-    clientLatencyStats[key] = observer.get();
+  const clientLatencyResults: Record<string, LatencyObserverResult> = {};
+  for (const key of Object.keys(clientLatencyObservers)) {
+    const observer = clientLatencyObservers[key];
+    clientLatencyResults[key] = observer.get();
   }
-  const clientThroughputStats: Record<string, ThroughputStat> = {};
-  for (const key of Object.keys(clientThroughputStatObservers)) {
-    const observer = clientThroughputStatObservers[key];
-    clientThroughputStats[key] = observer.get();
+  const clientThroughputResults: Record<string, ThroughputObserverResult> = {};
+  for (const key of Object.keys(clientThroughputObservers)) {
+    const observer = clientThroughputObservers[key];
+    clientThroughputResults[key] = observer.get();
   }
   return {
     connections: connections.map((conn) => ({
       ...conn,
-      latencyStats: Object.keys(clientLatencyStats)
+      latencyStats: Object.keys(clientLatencyResults)
         .filter((key) => key.startsWith(conn.id))
-        .map((key) => clientLatencyStats[key])
+        .map((key) => clientLatencyResults[key])
         .filter(Boolean),
-      throughputStats: Object.keys(clientThroughputStats)
+      throughputStats: Object.keys(clientThroughputResults)
         .filter((key) => key.startsWith(conn.id))
-        .map((key) => clientThroughputStats[key])
+        .map((key) => clientThroughputResults[key])
         .filter(Boolean),
     })),
-    clientLatencyStats,
-    clientThroughputStats,
-    globalLatencyStats: _.mapValues(globalLatencyStatObservers, (observer) => observer.get()),
-    globalThroughputStats: _.mapValues(globalThroughputStatObservers, (observer) => observer.get()),
+    clientLatencyResults,
+    clientThroughputResults,
+    globalLatencyResults: _.mapValues(globalLatencyObservers, (observer) => observer.get()),
+    globalThroughputResults: _.mapValues(globalThroughputObservers, (observer) => observer.get()),
     startConsumerLoadConnection: (cluster: KCluster) =>
       startConnection(
         cluster,
@@ -459,5 +497,6 @@ export const useClientConnections = () => {
       ),
     resetStatsObservers,
     stopConnection,
+    removeConnection,
   };
 };

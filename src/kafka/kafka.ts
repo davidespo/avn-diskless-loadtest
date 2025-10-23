@@ -1,8 +1,5 @@
 import { Kafka, logLevel } from "kafkajs";
-import { config } from "../config";
 import z from "zod";
-
-const brokers = `${config.KAFKA_BROKER_HOST}:${config.KAFKA_BROKER_PORT}`;
 
 const MyLogCreator =
   (_logLevel: logLevel) =>

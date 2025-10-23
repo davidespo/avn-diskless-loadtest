@@ -1,1 +1,2 @@
-export * from "./LatencyStatObserver"
+export * from './LatencyObserver'
+export * from './ThroughputObserver'

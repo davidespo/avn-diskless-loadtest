@@ -4,7 +4,6 @@ export const BaseObservation = z.object({
   kind: z.enum(["latency", "throughput"]),
   ts: z.coerce.number().default(Date.now()),
   client: z.enum(["producer", "consumer", "admin"]),
-  scope: z.enum(["latency", "throughput"]),
   topic: z.string(),
   partition: z.number().optional(),
 });

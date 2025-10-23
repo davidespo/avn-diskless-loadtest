@@ -2,7 +2,7 @@ import { KConsumer, KProducer } from "../kafka";
 import { KafkaConnectionConfig } from "../kafka/kafka";
 import { getNoopSink, Sink } from "./Sink";
 import { LatencyObservation } from "./types";
-import { z } from "zod";
+import { nanoid, z } from "zod";
 
 export const LatencyTestConfig = z.object({
   connectionConfig: KafkaConnectionConfig,
@@ -38,8 +38,9 @@ export class LatencyService {
       session,
       topic,
       mode: "latency",
-      consumerGroup: `latency-test-${session}`,
+      consumerGroup: `latency-test-${nanoid()}`,
       duration,
+      startFromBeginning: false,
       configuration: {},
     });
     const promise = new Promise<void>(async (resolve, reject) => {

@@ -1,21 +1,30 @@
-import { Card } from "primereact/card";
-import type { LatencyStat } from "../../types";
+import type { LatencyObserverResult } from "../../types";
 import _ from "lodash";
+import ms from "ms";
 
 type LatencyCardProps = {
-  stat: LatencyStat;
+  result: LatencyObserverResult | null;
 };
-export const LatencyCard = ({ stat }: LatencyCardProps) => {
-  const { key, avg, median, p90, p99, std } = stat;
+export const LatencyCard = ({ result }: LatencyCardProps) => {
+  if (!result) {
+    return null;
+  }
+  const { key, instantaneous, shortTerm, fullHistory } = result;
+  const { avg, median, p90, p99, std } = shortTerm;
+  const {min, max} = fullHistory
+  if (!median) {
+    return null;
+  }
   return (
-    <Card title={_.startCase(key)} className="m-2 w-20rem">
-      <div className="flex flex-column gap-2">
-        <div className="text-lg">Median: {median.toFixed(1)} ms</div>
-        <div>p99: {p99.toFixed(1)} ms</div>
-        <div>Mean: {avg.toFixed(1)} ms</div>
-        <div>p90: {p90.toFixed(1)} ms</div>
-        <div>Std. Dev.: +/-{std.toFixed(1)} ms</div>
-      </div>
-    </Card>
+    <div className="border-round-md shadow-1 p-2 w-20rem flex flex-column gap-1">
+      <div className="font-bold">{_.startCase(key)}</div>
+      <div className="text-xs pl-2">Current: {ms(Math.round(instantaneous))}</div>
+      <div className="text-xs pl-2">Median: {ms(Math.round(median))}</div>
+      <div className="text-xs pl-2">p99: {ms(Math.round(p99))}</div>
+      <div className="text-xs pl-2">Mean: {ms(Math.round(avg))}</div>
+      <div className="text-xs pl-2">p90: {ms(Math.round(p90))}</div>
+      <div className="text-xs pl-2">Std. Dev.: +/-{ms(Math.round(std))}</div>
+      <div className="text-xs pl-2">Range: {ms(Math.round(min))}-{ms(Math.round(max))}</div>
+    </div>
   );
 };

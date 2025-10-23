@@ -14,6 +14,7 @@ export const KConsumerConfig = z.object({
   consumerGroup: z.string(),
   duration: z.string(),
   configuration: z.any(),
+  startFromBeginning: z.boolean().default(false),
 });
 
 export type KConsumerConfig = z.infer<typeof KConsumerConfig>;
@@ -22,20 +23,38 @@ export class KConsumer {
   private consumer: Consumer;
   private count = 0;
   private isListening = false;
+  private flushSessionSumBytes = 0;
+  private lastFlushTime = 0;
+  private flushIntervalMs = 1000; // TODO: make configurable
   constructor(readonly config: KConsumerConfig) {
     this.consumer = buildKafkaClient(config.connectionConfig).consumer({
       ...config.configuration,
       groupId: config.consumerGroup,
+      allowAutoTopicCreation: false,
+      readUncommitted: false,
     });
   }
 
-  async subscribe(latencySink: Sink<LatencyObservation>, throughputSink: Sink<ThroughputObservation>) {
-    console.trace(`[CONSUMER.subscribe] Subscribing Consumer`, { topic: this.config.topic, groupId: this.config.consumerGroup, isListening: this.isListening });
+  async subscribe(
+    latencySink: Sink<LatencyObservation>,
+    throughputSink: Sink<ThroughputObservation>
+  ) {
+    console.trace(`[CONSUMER.subscribe] Subscribing Consumer`, {
+      topic: this.config.topic,
+      groupId: this.config.consumerGroup,
+      isListening: this.isListening,
+    });
     if (this.isListening) return;
     await this.consumer.connect();
-    console.trace('[CONSUMER.subscribe] Connected');
-    await this.consumer.subscribe({ topic: this.config.topic, fromBeginning: false });
-    console.trace('[CONSUMER.subscribe] Subscribed to topic:', this.config.topic);
+    console.trace("[CONSUMER.subscribe] Connected");
+    await this.consumer.subscribe({
+      topic: this.config.topic,
+      fromBeginning: this.config.startFromBeginning,
+    });
+    console.trace(
+      "[CONSUMER.subscribe] Subscribed to topic:",
+      this.config.topic
+    );
     const lastDataTimeHolder = { lastDataTime: Date.now() };
     const batchHandler = this.buildMessageHandler(latencySink, throughputSink);
     await this.consumer.run({
@@ -44,11 +63,16 @@ export class KConsumer {
         lastDataTimeHolder.lastDataTime = Date.now();
       },
     });
-    console.trace('[CONSUMER.subscribe] Consumer is listening for messages...');
+    console.trace("[CONSUMER.subscribe] Consumer is listening for messages...");
     this.isListening = true;
   }
 
-  private recordLatency = (topic: string, partition: number, message: Message, sink: Sink<LatencyObservation>) => {
+  private recordLatency = (
+    topic: string,
+    partition: number,
+    message: Message,
+    sink: Sink<LatencyObservation>
+  ) => {
     const ts = new Number(message.timestamp).valueOf();
     const now = Date.now();
     const latency = now - ts;
@@ -56,7 +80,6 @@ export class KConsumer {
       kind: "latency",
       ts: Date.now(),
       client: "consumer",
-      scope: "latency",
       topic,
       partition,
       valueMs: latency,
@@ -64,7 +87,10 @@ export class KConsumer {
   };
 
   private buildMessageHandler =
-    (latencySink: Sink<LatencyObservation>, throughputSink: Sink<ThroughputObservation>) =>
+    (
+      latencySink: Sink<LatencyObservation>,
+      throughputSink: Sink<ThroughputObservation>
+    ) =>
     async (payload: EachBatchPayload, lastFetchTime: number) => {
       const { topic, partition, messages } = payload.batch;
       this.count += messages.length;
@@ -78,38 +104,50 @@ export class KConsumer {
           break;
         case "throughput":
           const batchSize = messages.reduce(
-            (acc, message) => acc + (message.value?.length ?? 0) + (message.key?.length ?? 0),
+            (acc, message) =>
+              acc + (message.value?.length ?? 0) + (message.key?.length ?? 0),
             0
           );
-          throughputSink({
-            kind: "throughput",
-            ts: Date.now(),
-            client: "consumer",
-            scope: "throughput",
-            topic,
-            partition,
-            valueBytes: batchSize,
-            duration: 0, // Duration is not calculated here
-          });
+          if (batchSize === 0) return;
+          this.flushSessionSumBytes += batchSize;
+          const durationMs = Date.now() - this.lastFlushTime;
+          if (durationMs > this.flushIntervalMs) {
+            throughputSink({
+              kind: "throughput",
+              ts: Date.now(),
+              client: "consumer",
+              topic,
+              partition,
+              valueBytes: this.flushSessionSumBytes,
+              duration: durationMs,
+            });
+            this.lastFlushTime = Date.now();
+            this.flushSessionSumBytes = 0;
+          }
           break;
       }
     };
 
-  async start(latencySink: Sink<LatencyObservation>, throughputSink: Sink<ThroughputObservation>) {
-    console.trace('[CONSUMER.start] Starting Consumer...');
+  async start(
+    latencySink: Sink<LatencyObservation>,
+    throughputSink: Sink<ThroughputObservation>
+  ) {
+    console.trace("[CONSUMER.start] Starting Consumer...");
     const { duration } = this.config;
     const durationMs = ms(duration as StringValue);
     const endTime = Date.now() + durationMs;
     try {
       await this.subscribe(latencySink, throughputSink);
-      console.trace('[CONSUMER.start] Consumer Subscribed, running...');
-      console.trace('[CONSUMER.start] Waiting for duration to elapse...');
+      console.trace("[CONSUMER.start] Consumer Subscribed, running...");
+      console.trace("[CONSUMER.start] Waiting for duration to elapse...");
       while (Date.now() < endTime && this.isListening) {
-        await new Promise((resolve) => setTimeout(resolve, Math.min(5000, endTime - Date.now())));
+        await new Promise((resolve) =>
+          setTimeout(resolve, Math.min(5000, endTime - Date.now()))
+        );
       }
-      console.trace('[CONSUMER.start] Duration elapsed, stopping consumer...');
+      console.trace("[CONSUMER.start] Duration elapsed, stopping consumer...");
       await this.stop();
-      console.trace('[CONSUMER.start] Consumer Stopped');
+      console.trace("[CONSUMER.start] Consumer Stopped");
     } catch (error) {
       console.error("[CONSUMER.start] Consumer connection error", error);
       throw error;
@@ -119,11 +157,11 @@ export class KConsumer {
   }
 
   async stop() {
-    console.trace('[CONSUMER.stop] Disconnecting Consumer...');
+    console.trace("[CONSUMER.stop] Disconnecting Consumer...");
     await this.consumer.stop();
-    console.trace('[CONSUMER.stop] Consumer Stopped, disconnecting...');
+    console.trace("[CONSUMER.stop] Consumer Stopped, disconnecting...");
     await this.consumer.disconnect();
-    console.trace('[CONSUMER.stop] Consumer Disconnected');
+    console.trace("[CONSUMER.stop] Consumer Disconnected");
     this.isListening = false;
   }
 }

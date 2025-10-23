@@ -5,6 +5,7 @@ import ms, { StringValue } from "ms";
 import { Sink } from "../observability/Sink";
 import { LatencyObservation, ThroughputObservation } from "../observability";
 import prettyBytes from "pretty-bytes";
+import { late } from "zod/v3";
 
 export const KProducerConfig = z.object({
   connectionConfig: KafkaConnectionConfig,
@@ -43,29 +44,10 @@ export class KProducer {
     }));
   }
 
-  private async _sendBatch(
-    messages: { key: Buffer; value: Buffer }[],
-    throughputSink: Sink<ThroughputObservation>
-  ) {
-    const startTime = Date.now();
-    const {
-      rate: { count, size },
-      topic,
-    } = this.config;
+  private async _sendBatch(messages: { key: Buffer; value: Buffer }[]) {
+    const { topic } = this.config;
     if (!this.isConnected || !this.isRunning) return;
-    await this.producer.send({
-      topic,
-      messages,
-    });
-    throughputSink({
-      kind: "throughput",
-      ts: Date.now(),
-      client: "producer",
-      scope: "throughput",
-      topic,
-      valueBytes: size * count,
-      duration: Date.now() - startTime,
-    });
+    await this.producer.send({ topic, messages });
   }
 
   async start(
@@ -75,43 +57,63 @@ export class KProducer {
     console.trace("[PRODUCER.start] Starting Producer...");
     this.isRunning = true;
     const {
-      rate: { delay, duration },
+      rate: { size, delay, duration },
+      topic,
     } = this.config;
     const startTime = Date.now();
     const durationMs = ms(duration as StringValue);
-    const delayMs = delay ? ms(delay as StringValue) : -1;
     const endTime = Date.now() + durationMs;
-    let count = 0;
+    const delayMs = delay ? ms(delay as StringValue) : -1;
+    const flushDelayMs = Math.max(1000, delayMs - 1);
+    let lastFlushTs = 0;
+    let totalBatchCount = 0;
+    let latencySum = 0;
+    let flushBatchCount = 0;
     try {
       await this.producer.connect();
       this.isConnected = true;
       console.trace("[PRODUCER.start] Producer connected");
       const batch = this.buildBatch();
       while (Date.now() < endTime && this.isRunning) {
-        const startTime = Date.now();
-        await this._sendBatch(batch, throughputSink);
-        count++;
+        const batchStartTime = Date.now();
+        await this._sendBatch(batch);
+        const batchDuration = Date.now() - batchStartTime;
+        latencySum += batchDuration;
+        flushBatchCount++;
+        totalBatchCount++;
+        if (Date.now() - lastFlushTs >= flushDelayMs) {
+          throughputSink({
+            kind: "throughput",
+            ts: Date.now(),
+            client: "producer",
+            topic,
+            valueBytes: size * batch.length * flushBatchCount,
+            duration: Date.now() - lastFlushTs,
+          });
+          latencySink({
+            kind: "latency",
+            ts: Date.now(),
+            topic: this.config.topic,
+            client: "producer",
+            valueMs: latencySum / flushBatchCount,
+          });
+          lastFlushTs = Date.now();
+          latencySum = 0;
+          flushBatchCount = 0;
+        }
         if (!this.isRunning) break;
-        latencySink({
-          kind: "latency",
-          ts: Date.now(),
-          topic: this.config.topic,
-          client: "producer",
-          scope: "latency",
-          valueMs: Date.now() - startTime,
-        });
         if (delayMs > 0) {
           await new Promise((resolve) => setTimeout(resolve, delayMs));
         }
       }
       const durationMsActual = Date.now() - startTime;
-      const totalMessages = count * this.config.rate.count;
+      const totalMessages = totalBatchCount * this.config.rate.count;
       const totalBytes = totalMessages * this.config.rate.size;
       const prettyTotalBytes = prettyBytes(totalBytes);
       const bytesPerSec = totalBytes / (durationMsActual / 1000);
       const prettyRate = prettyBytes(bytesPerSec) + "/s";
       console.trace("[PRODUCER.start] Producer finished sending messages.", {
-        totalBatches: count,
+        totalBatches: totalBatchCount,
         totalMessages,
         totalBytes,
         prettyTotalBytes,

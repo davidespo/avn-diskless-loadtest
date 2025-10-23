@@ -14,13 +14,14 @@ import {
 import { getSSESink, SSESinkOptions } from "./observability/Sink";
 import { kafkaService } from "./kafka/KafkaService";
 import { KafkaConnectionConfig } from "./kafka/kafka";
+import { config } from "./config";
 
 FlowLogger.configureConsole({
   format: "cli",
 });
 
 const app = express();
-const port = process.env.PORT || 3000;
+const port = config.PORT;
 
 // Middleware
 app.use(cors());

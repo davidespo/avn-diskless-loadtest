@@ -5,8 +5,11 @@
   "main": "index.js",
   "scripts": {
     "start": "ts-node src/main.ts",
+    "start:docker": "docker run -e PORT=3000 -p 3000:3000 avn-diskless-loadtest:latest",
     "dev": "ts-node-dev src/main.ts",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "docker build -t avn-diskless-loadtest:latest .",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "deploy": "./bin/deploy-api.sh"
   },
   "keywords": [],
   "author": "",

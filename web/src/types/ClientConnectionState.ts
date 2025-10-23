@@ -1,5 +1,5 @@
-import type { LatencyStat } from "./LatencyStat";
-import type { ThroughputStat } from "./ThroughputStat";
+import type { LatencyObserverResult } from "./LatencyStat";
+import type { ThroughputObserverResult } from "./ThroughputStat";
 
 export type ClientConnectionState = {
   id: string;
@@ -8,6 +8,6 @@ export type ClientConnectionState = {
   isRunning: boolean;
   isConnected: boolean;
   stop: () => Promise<void>;
-  latencyStats: LatencyStat[];
-  throughputStats: ThroughputStat[];
+  latencyStats: LatencyObserverResult[];
+  throughputStats: ThroughputObserverResult[];
 };
